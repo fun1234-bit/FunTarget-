@@ -62,25 +62,24 @@ jobs:
           echo "Android platform already exists, skipping."
         fi
 
-    # --- यहाँ से 'Signing' हिस्सा है ---
+    # --- यहाँ 'Signing' हिस्सा है ---
 
     - name: Decode Keystore
       run: |
         cd cordova_project/project
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > my-release-key.jks
 
+    # सुधार: यहाँ --buildConfig या सीधा निर्देश दिया है ताकि APK ही बने
     - name: Build APK (Signed Release)
       run: |
         cd cordova_project/project
-        cordova build android --release -- \
-          --keystore=my-release-key.jks \
-          --storePassword=${{ secrets.KEYSTORE_PASSWORD }} \
-          --alias=my-key-alias \
-          --password=${{ secrets.KEYSTORE_PASSWORD }}
+        cordova build android --release --verbose -- --keystore=my-release-key.jks --storePassword=${{ secrets.KEYSTORE_PASSWORD }} --alias=my-key-alias --password=${{ secrets.KEYSTORE_PASSWORD }} --packageType=apk
 
-    # 🔥 सुधार: अब यह कोड APK को हर हाल में ढूंढ लेगा
-    - name: Upload APK
+    # सुधार: यह स्टेप अब APK और AAB दोनों को ढूँढेगा ताकि आप खाली हाथ न रहें
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: FunTarget-Signed-APK
-        path: cordova_project/project/platforms/android/app/build/outputs/apk/release/**/*.apk
+        name: FunTarget-Final-Build
+        path: |
+          cordova_project/project/platforms/android/app/build/outputs/apk/release/*.apk
+          cordova_project/project/platforms/android/app/build/outputs/bundle/release/*.aab
