@@ -62,13 +62,24 @@ jobs:
           echo "Android platform already exists, skipping."
         fi
 
-    - name: Build APK (Debug)
+    # --- यहाँ से नया 'Signing' हिस्सा शुरू होता है, बाकी सब वैसा ही है ---
+
+    - name: Decode Keystore
       run: |
         cd cordova_project/project
-        cordova build android
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > my-release-key.jks
+
+    - name: Build APK (Signed Release)
+      run: |
+        cd cordova_project/project
+        cordova build android --release -- \
+          --keystore=my-release-key.jks \
+          --storePassword=${{ secrets.KEYSTORE_PASSWORD }} \
+          --alias=my-key-alias \
+          --password=${{ secrets.KEYSTORE_PASSWORD }}
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: FunTarget-APK
-        path: cordova_project/project/platforms/android/app/build/outputs/apk/debug/*.apk
+        name: FunTarget-Signed-APK
+        path: cordova_project/project/platforms/android/app/build/outputs/apk/release/*.apk
