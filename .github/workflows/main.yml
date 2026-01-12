@@ -1,0 +1,74 @@
+name: Build Cordova APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Java JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: 17
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 18
+
+    - name: Install Cordova
+      run: npm install -g cordova
+
+    # 🔥 FIXED unzip (never fails)
+    - name: Unzip project (safe)
+      run: |
+        rm -rf cordova_project
+        mkdir cordova_project
+        unzip -oq FunTarget_Final_Clean.zip -d cordova_project || true
+        ls cordova_project
+
+    # 🔥 FIXED move (auto-detect Cordova folder)
+    - name: Prepare Cordova project
+      run: |
+        cd cordova_project
+        PROJECT_DIR=$(find . -maxdepth 2 -name config.xml | head -n 1 | xargs dirname)
+        echo "Detected Cordova project at: $PROJECT_DIR"
+        mv "$PROJECT_DIR" project
+        ls project
+
+    - name: Install project dependencies
+      run: |
+        cd cordova_project/project
+        npm install
+
+    - name: Add Android platform (safe)
+      run: |
+        cd cordova_project/project
+        if [ ! -d "platforms/android" ]; then
+          cordova platform add android
+        else
+          echo "Android platform already exists, skipping."
+        fi
+
+    - name: Build APK (Debug)
+      run: |
+        cd cordova_project/project
+        cordova build android
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: FunTarget-APK
+        path: cordova_project/project/platforms/android/app/build/outputs/apk/debug/*.apk
