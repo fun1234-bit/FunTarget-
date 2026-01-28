@@ -31,81 +31,111 @@ jobs:
     - name: Install Cordova
       run: npm install -g cordova
 
-    # 🔥 FIXED unzip (never fails)
+    # प्रोजेक्ट को अनज़िप करना
     - name: Unzip project (safe)
       run: |
         rm -rf cordova_project
         mkdir cordova_project
         unzip -oq FunTarget_Final_Clean.zip -d cordova_project || true
-        ls cordova_project
 
-    # 🔥 FIXED move (auto-detect Cordova folder)
+    # कोर्डोवा फोल्डर तैयार करना
     - name: Prepare Cordova project
       run: |
         cd cordova_project
         PROJECT_DIR=$(find . -maxdepth 2 -name config.xml | head -n 1 | xargs dirname)
-        echo "Detected Cordova project at: $PROJECT_DIR"
         mv "$PROJECT_DIR" project
-        ls project
 
     - name: Install project dependencies
       run: |
         cd cordova_project/project
         npm install
 
-    - name: Add Android platform (safe)
+    - name: Add Android platform
       run: |
         cd cordova_project/project
         if [ ! -d "platforms/android" ]; then
           cordova platform add android
         else
-          echo "Android platform already exists, skipping."
+          echo "Android platform already exists."
         fi
 
-    # 🛡️ नया सुरक्षा स्टेप: यह अपने आप MainActivity ढूँढेगा और क्रैश कोड डालेगा
-    - name: Inject Anti-Tamper Security (Auto-detect Package)
+    # 🛡️ एंटी-टैम्पर सुरक्षा: यह कोड ऐप को दोबारा साइन करने पर क्रैश कर देगा
+    - name: Inject Anti-Tamper Security
       run: |
         cd cordova_project/project
-        # 1. MainActivity.java की लोकेशन ढूँढना
-        MAIN_ACTIVITY_PATH=$(find platforms/android/app/src/main/java -name "MainActivity.java")
-        echo "Found MainActivity at: $MAIN_ACTIVITY_PATH"
-
-        # 2. फाइल के अंदर पैकेज नाम को सुरक्षित रखना और सुरक्षा कोड इन्जेक्ट करना
-        # हम यहाँ एक Bash स्क्रिप्ट का उपयोग कर रहे हैं जो फाइल को एडिट कर देगी
-        sed -i '/import org.apache.cordova.\*;/a import android.content.pm.PackageInfo;\nimport android.content.pm.PackageManager;\nimport android.content.pm.Signature;\nimport java.security.MessageDigest;' "$MAIN_ACTIVITY_PATH"
         
-        # यह हिस्सा onCreate के अंदर चेकिंग कोड डालेगा
-        sed -i '/super.onCreate(savedInstanceState);/a \        if (!verifySignature()) { finish(); System.exit(0); return; }' "$MAIN_ACTIVITY_PATH"
+        # पैकेज आईडी आपके config.xml से मिली है: com.funtarget.app
+        # फाइल का सही रास्ता ढूँढना
+        FILE_PATH="platforms/android/app/src/main/java/com/funtarget/app/MainActivity.java"
+        
+        # पक्का करना कि फोल्डर मौजूद है (अगर कोर्डोवा ने नहीं बनाया तो बना दे)
+        mkdir -p platforms/android/app/src/main/java/com/funtarget/app/
 
-        # यह फाइल के अंत में verifySignature मेथड जोड़ देगा
-        sed -i '$d' "$MAIN_ACTIVITY_PATH" # आखिरी लाइन हटाओ (})
-        cat >> "$MAIN_ACTIVITY_PATH" <<EOF
-    private boolean verifySignature() {
-        try {
-            PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_SIGNATURES);
-            for (Signature signature : packageInfo.signatures) {
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
-                md.update(signature.toByteArray());
-                byte[] digest = md.digest();
-                StringBuilder hexString = new StringBuilder();
-                for (byte b : digest) { String hex = Integer.toHexString(0xff & b); if (hex.length() == 1) hexString.append('0'); hexString.append(hex); }
-                // यहाँ अपना असली SHA-256 डालें
-                if (hexString.toString().equalsIgnoreCase("${{ secrets.MY_SHA256 }}")) return true;
+        echo "Injecting security into $FILE_PATH"
+
+        cat > "$FILE_PATH" <<EOF
+        package com.funtarget.app;
+
+        import android.os.Bundle;
+        import android.content.pm.PackageInfo;
+        import android.content.pm.PackageManager;
+        import android.content.pm.Signature;
+        import java.security.MessageDigest;
+        import org.apache.cordova.*;
+
+        public class MainActivity extends CordovaActivity {
+            
+            // ⚠️ आपका असली SHA-256 (बिना कोलन के) यहाँ आएगा
+            private static final String VALID_SIG = "${{ secrets.MY_SHA256 }}";
+
+            @Override
+            public void onCreate(Bundle savedInstanceState) {
+                super.onCreate(savedInstanceState);
+                
+                if (!checkSignature()) {
+                    // अगर कोई ऐप के साथ छेड़खानी करे तो ऐप बंद हो जाए
+                    android.util.Log.e("SECURITY", "Tampering detected!");
+                    finish();
+                    System.exit(0);
+                    return;
+                }
+
+                loadUrl(launchUrl);
             }
-        } catch (Exception e) {}
-        return false;
-    }
-}
-EOF
 
-    # --- 'Full Signing' हिस्सा ---
+            private boolean checkSignature() {
+                try {
+                    PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_SIGNATURES);
+                    for (Signature signature : packageInfo.signatures) {
+                        MessageDigest md = MessageDigest.getInstance("SHA-256");
+                        md.update(signature.toByteArray());
+                        byte[] digest = md.digest();
+                        StringBuilder hexString = new StringBuilder();
+                        for (byte b : digest) {
+                            String hex = Integer.toHexString(0xff & b);
+                            if (hex.length() == 1) hexString.append('0');
+                            hexString.append(hex);
+                        }
+                        String currentSig = hexString.toString().toUpperCase();
+                        // अगर सीक्रेट सेट नहीं है तो चेक स्किप न हो, इसलिए तुलना करें
+                        if (currentSig.equals(VALID_SIG.toUpperCase().replace(":", ""))) {
+                            return true;
+                        }
+                    }
+                } catch (Exception e) {
+                    return false;
+                }
+                return false;
+            }
+        }
+        EOF
 
     - name: Decode Keystore
       run: |
         cd cordova_project/project
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > my-release-key.jks
 
-    - name: Create build.json for Full Signing
+    - name: Create build.json for Signing
       run: |
         cd cordova_project/project
         echo '{
@@ -120,7 +150,7 @@ EOF
           }
         }' > build.json
 
-    - name: Build APK (Signed Release)
+    - name: Build APK (Fully Signed)
       run: |
         cd cordova_project/project
         cordova build android --release --buildConfig=build.json --verbose
@@ -128,7 +158,7 @@ EOF
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: FunTarget-Final-Build
+        name: FunTarget-Pro-Signed
         path: |
           cordova_project/project/platforms/android/app/build/outputs/apk/release/*.apk
           cordova_project/project/platforms/android/app/build/outputs/bundle/release/*.aab
