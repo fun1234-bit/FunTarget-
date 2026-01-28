@@ -62,20 +62,69 @@ jobs:
           echo "Android platform already exists, skipping."
         fi
 
-    # --- यहाँ 'Signing' हिस्सा है ---
+    # 🛡️ नया सुरक्षा स्टेप: यह अपने आप MainActivity ढूँढेगा और क्रैश कोड डालेगा
+    - name: Inject Anti-Tamper Security (Auto-detect Package)
+      run: |
+        cd cordova_project/project
+        # 1. MainActivity.java की लोकेशन ढूँढना
+        MAIN_ACTIVITY_PATH=$(find platforms/android/app/src/main/java -name "MainActivity.java")
+        echo "Found MainActivity at: $MAIN_ACTIVITY_PATH"
+
+        # 2. फाइल के अंदर पैकेज नाम को सुरक्षित रखना और सुरक्षा कोड इन्जेक्ट करना
+        # हम यहाँ एक Bash स्क्रिप्ट का उपयोग कर रहे हैं जो फाइल को एडिट कर देगी
+        sed -i '/import org.apache.cordova.\*;/a import android.content.pm.PackageInfo;\nimport android.content.pm.PackageManager;\nimport android.content.pm.Signature;\nimport java.security.MessageDigest;' "$MAIN_ACTIVITY_PATH"
+        
+        # यह हिस्सा onCreate के अंदर चेकिंग कोड डालेगा
+        sed -i '/super.onCreate(savedInstanceState);/a \        if (!verifySignature()) { finish(); System.exit(0); return; }' "$MAIN_ACTIVITY_PATH"
+
+        # यह फाइल के अंत में verifySignature मेथड जोड़ देगा
+        sed -i '$d' "$MAIN_ACTIVITY_PATH" # आखिरी लाइन हटाओ (})
+        cat >> "$MAIN_ACTIVITY_PATH" <<EOF
+    private boolean verifySignature() {
+        try {
+            PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_SIGNATURES);
+            for (Signature signature : packageInfo.signatures) {
+                MessageDigest md = MessageDigest.getInstance("SHA-256");
+                md.update(signature.toByteArray());
+                byte[] digest = md.digest();
+                StringBuilder hexString = new StringBuilder();
+                for (byte b : digest) { String hex = Integer.toHexString(0xff & b); if (hex.length() == 1) hexString.append('0'); hexString.append(hex); }
+                // यहाँ अपना असली SHA-256 डालें
+                if (hexString.toString().equalsIgnoreCase("${{ secrets.MY_SHA256 }}")) return true;
+            }
+        } catch (Exception e) {}
+        return false;
+    }
+}
+EOF
+
+    # --- 'Full Signing' हिस्सा ---
 
     - name: Decode Keystore
       run: |
         cd cordova_project/project
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > my-release-key.jks
 
-    # सुधार: यहाँ --buildConfig या सीधा निर्देश दिया है ताकि APK ही बने
+    - name: Create build.json for Full Signing
+      run: |
+        cd cordova_project/project
+        echo '{
+          "android": {
+            "release": {
+              "keystore": "my-release-key.jks",
+              "storePassword": "${{ secrets.KEYSTORE_PASSWORD }}",
+              "alias": "my-key-alias",
+              "password": "${{ secrets.KEYSTORE_PASSWORD }}",
+              "keystoreType": ""
+            }
+          }
+        }' > build.json
+
     - name: Build APK (Signed Release)
       run: |
         cd cordova_project/project
-        cordova build android --release --verbose -- --keystore=my-release-key.jks --storePassword=${{ secrets.KEYSTORE_PASSWORD }} --alias=my-key-alias --password=${{ secrets.KEYSTORE_PASSWORD }} --packageType=apk
+        cordova build android --release --buildConfig=build.json --verbose
 
-    # सुधार: यह स्टेप अब APK और AAB दोनों को ढूँढेगा ताकि आप खाली हाथ न रहें
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
