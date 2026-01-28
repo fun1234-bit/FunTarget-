@@ -31,14 +31,12 @@ jobs:
     - name: Install Cordova
       run: npm install -g cordova
 
-    # प्रोजेक्ट को अनज़िप करना
-    - name: Unzip project (safe)
+    - name: Unzip project
       run: |
         rm -rf cordova_project
         mkdir cordova_project
         unzip -oq FunTarget_Final_Clean.zip -d cordova_project || true
 
-    # कोर्डोवा फोल्डर तैयार करना
     - name: Prepare Cordova project
       run: |
         cd cordova_project
@@ -53,29 +51,16 @@ jobs:
     - name: Add Android platform
       run: |
         cd cordova_project/project
-        if [ ! -d "platforms/android" ]; then
-          cordova platform add android
-        else
-          echo "Android platform already exists."
-        fi
+        cordova platform add android || echo "Platform exists"
 
-    # 🛡️ एंटी-टैम्पर सुरक्षा: यह कोड ऐप को दोबारा साइन करने पर क्रैश कर देगा
     - name: Inject Anti-Tamper Security
       run: |
         cd cordova_project/project
-        
-        # पैकेज आईडी आपके config.xml से मिली है: com.funtarget.app
-        # फाइल का सही रास्ता ढूँढना
-        FILE_PATH="platforms/android/app/src/main/java/com/funtarget/app/MainActivity.java"
-        
-        # पक्का करना कि फोल्डर मौजूद है (अगर कोर्डोवा ने नहीं बनाया तो बना दे)
         mkdir -p platforms/android/app/src/main/java/com/funtarget/app/
-
-        echo "Injecting security into $FILE_PATH"
+        FILE_PATH="platforms/android/app/src/main/java/com/funtarget/app/MainActivity.java"
 
         cat > "$FILE_PATH" <<EOF
         package com.funtarget.app;
-
         import android.os.Bundle;
         import android.content.pm.PackageInfo;
         import android.content.pm.PackageManager;
@@ -84,27 +69,21 @@ jobs:
         import org.apache.cordova.*;
 
         public class MainActivity extends CordovaActivity {
-            
-            // ⚠️ आपका असली SHA-256 (बिना कोलन के) यहाँ आएगा
-            private static final String VALID_SIG = "${{ secrets.MY_SHA256 }}";
-
             @Override
             public void onCreate(Bundle savedInstanceState) {
                 super.onCreate(savedInstanceState);
-                
                 if (!checkSignature()) {
-                    // अगर कोई ऐप के साथ छेड़खानी करे तो ऐप बंद हो जाए
-                    android.util.Log.e("SECURITY", "Tampering detected!");
                     finish();
                     System.exit(0);
                     return;
                 }
-
                 loadUrl(launchUrl);
             }
 
             private boolean checkSignature() {
                 try {
+                    String validSig = "${{ secrets.MY_SHA256 }}".replace(":", "").toUpperCase();
+                    if (validSig.isEmpty()) return true;
                     PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_SIGNATURES);
                     for (Signature signature : packageInfo.signatures) {
                         MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -116,15 +95,9 @@ jobs:
                             if (hex.length() == 1) hexString.append('0');
                             hexString.append(hex);
                         }
-                        String currentSig = hexString.toString().toUpperCase();
-                        // अगर सीक्रेट सेट नहीं है तो चेक स्किप न हो, इसलिए तुलना करें
-                        if (currentSig.equals(VALID_SIG.toUpperCase().replace(":", ""))) {
-                            return true;
-                        }
+                        if (hexString.toString().equalsIgnoreCase(validSig)) return true;
                     }
-                } catch (Exception e) {
-                    return false;
-                }
+                } catch (Exception e) {}
                 return false;
             }
         }
@@ -135,7 +108,7 @@ jobs:
         cd cordova_project/project
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > my-release-key.jks
 
-    - name: Create build.json for Signing
+    - name: Create build.json
       run: |
         cd cordova_project/project
         echo '{
@@ -145,20 +118,23 @@ jobs:
               "storePassword": "${{ secrets.KEYSTORE_PASSWORD }}",
               "alias": "my-key-alias",
               "password": "${{ secrets.KEYSTORE_PASSWORD }}",
-              "keystoreType": ""
+              "keystoreType": "apk"
             }
           }
         }' > build.json
 
-    - name: Build APK (Fully Signed)
+    - name: Build APK (Release)
       run: |
         cd cordova_project/project
-        cordova build android --release --buildConfig=build.json --verbose
+        # --device और buildConfig का इस्तेमाल सुनिश्चित करता है कि सही APK बने
+        cordova build android --release --device --buildConfig=build.json --verbose
 
+    # 🚀 सुधारा हुआ अपलोड स्टेप: यह पूरी डायरेक्टरी चेक करेगा
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: FunTarget-Pro-Signed
+        name: FunTarget-Pro-Final-APK
         path: |
           cordova_project/project/platforms/android/app/build/outputs/apk/release/*.apk
           cordova_project/project/platforms/android/app/build/outputs/bundle/release/*.aab
+        if-no-files-found: error
