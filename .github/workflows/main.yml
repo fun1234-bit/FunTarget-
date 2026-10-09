@@ -139,4 +139,4 @@ jobs:
         path: |
           cordova_project/project/platforms/android/app/build/outputs/apk/release/*.apk
           cordova_project/project/platforms/android/app/build/outputs/bundle/release/*.aab
-        if-no-files-found: error
+        if-no-files-found: error 
